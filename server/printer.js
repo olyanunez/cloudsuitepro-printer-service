@@ -79,7 +79,23 @@ class PrinterService {
     async listPrinters() {
         try {
             const printer = this.createPrinter();
-            const printers = await printer.listPrinters();
+            const printers = printer.printerName ? [printer.printerName] : [];
+
+            // En macOS, intentar obtener la lista de impresoras del sistema
+            if (process.platform === 'darwin') {
+                const { execSync } = require('child_process');
+                try {
+                    const output = execSync('lpstat -p -d', { encoding: 'utf8' });
+                    const lines = output.split('\n');
+                    const printerNames = lines
+                        .filter(line => line.startsWith('printer'))
+                        .map(line => line.split(' ')[1]);
+                    return printerNames.length > 0 ? printerNames : printers;
+                } catch (err) {
+                    log.warn('No se pudo obtener lista de impresoras del sistema');
+                }
+            }
+
             return printers;
         } catch (error) {
             log.error('Error listando impresoras:', error);
@@ -88,6 +104,62 @@ class PrinterService {
     }
 
     async printInvoice(data) {
+        // Modo simulación: Si no hay impresora configurada, solo mostrar en log
+        if (!this.config.printerName) {
+            log.info('═══════════════════════════════════════════════');
+            log.info('🖨️  MODO SIMULACIÓN - Sin impresora configurada');
+            log.info('═══════════════════════════════════════════════');
+            log.info('');
+            log.info(`          ${data.companyName || 'CloudSuite Pro'}`);
+            if (data.companyAddress) log.info(`          ${data.companyAddress}`);
+            if (data.companyRnc) log.info(`          RNC: ${data.companyRnc}`);
+            if (data.companyPhone) log.info(`          Tel: ${data.companyPhone}`);
+            log.info('───────────────────────────────────────────────');
+            if (data.ncf) log.info(`NCF: ${data.ncf}`);
+            log.info(`FACTURA: ${data.invoiceNumber || 'N/A'}`);
+            log.info(`Fecha: ${this.formatDate(data.date)}`);
+            log.info(`Cliente: ${data.customerName || 'Consumidor Final'}`);
+            if (data.customerRnc) log.info(`RNC/Cedula: ${data.customerRnc}`);
+            log.info('───────────────────────────────────────────────');
+            log.info('Cant  Descripcion              Total');
+            log.info('───────────────────────────────────────────────');
+
+            for (const item of data.items || []) {
+                const qty = (item.quantity?.toString() || '1').padEnd(5);
+                const name = this.truncate(item.name || item.description || '', 20).padEnd(23);
+                const total = `$${this.formatMoney(item.total || item.price)}`;
+                log.info(`${qty} ${name} ${total}`);
+                if (item.quantity > 1 && item.price) {
+                    log.info(`      @ $${this.formatMoney(item.price)} c/u`);
+                }
+            }
+
+            log.info('───────────────────────────────────────────────');
+            if (data.subtotal !== undefined) {
+                log.info(`                  Subtotal: $${this.formatMoney(data.subtotal)}`);
+            }
+            if (data.discount && data.discount > 0) {
+                log.info(`                 Descuento: -$${this.formatMoney(data.discount)}`);
+            }
+            if (data.tax !== undefined) {
+                log.info(`             ITBIS (18%): $${this.formatMoney(data.tax)}`);
+            }
+            log.info('═══════════════════════════════════════════════');
+            log.info(`              TOTAL: $${this.formatMoney(data.total)}`);
+            log.info('═══════════════════════════════════════════════');
+            if (data.paymentMethod) {
+                log.info(`Metodo de pago: ${data.paymentMethod}`);
+            }
+            log.info('');
+            log.info('          ¡Gracias por su compra!');
+            if (data.footer) log.info(`          ${data.footer}`);
+            log.info('');
+            log.info('✅ Factura simulada exitosamente');
+            log.info('');
+            return;
+        }
+
+        // Modo real: Imprimir en impresora térmica
         const printer = this.createPrinter();
 
         try {
