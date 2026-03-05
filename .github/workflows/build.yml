@@ -9,6 +9,8 @@ on:
 jobs:
   build-windows:
     runs-on: windows-latest
+    permissions:
+      contents: write
     steps:
       - name: Checkout code
         uses: actions/checkout@v3
@@ -22,7 +24,7 @@ jobs:
         run: npm install
 
       - name: Build Windows installer
-        run: npm run build:win
+        run: npm run build:win -- --publish never
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -34,6 +36,8 @@ jobs:
 
   build-mac:
     runs-on: macos-latest
+    permissions:
+      contents: write
     steps:
       - name: Checkout code
         uses: actions/checkout@v3
@@ -47,7 +51,7 @@ jobs:
         run: npm install
 
       - name: Build macOS installer
-        run: npm run build:mac
+        run: npm run build:mac -- --publish never
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
