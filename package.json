@@ -48,7 +48,9 @@
             ],
             "icon": "assets/icon.png",
             "artifactName": "CloudSuite-Printer-Service-Setup-${version}.${ext}",
-            "signingHashAlgorithms": ["sha256"],
+            "signingHashAlgorithms": [
+                "sha256"
+            ],
             "sign": null
         },
         "mac": {
@@ -76,15 +78,17 @@
             "createStartMenuShortcut": true,
             "shortcutName": "CloudSuite Printer Service",
             "runAfterFinisolyanunez",
-                "repo": "cloudsuitepro-printer-service"
-            }
-        ],
-        "afterSign": null,
-        "electronLanguages": ["es", "en"    {
-                "provider": "github",
-                "owner": "cloudsuitepro",
-                "repo": "cloudsuitepro-printer-service"
-            }
-        ]
-    }
+            "repo": "cloudsuitepro-printer-service"
+        }
+    ],
+    "afterSign": null,
+    "electronLanguages": [
+        "es",
+        "en"{
+            "provider": "github",
+            "owner": "cloudsuitepro",
+            "repo": "cloudsuitepro-printer-service"
+        }
+    ]
+}
 }
