@@ -1,6 +1,6 @@
 {
     "name": "cloudsuitepro-printer-service",
-    "version": "1.0.0",
+    "version": "1.0.2",
     "description": "CloudSuite Pro Printer Service - Servicio de impresión para impresoras térmicas",
     "main": "electron/main.js",
     "author": "CloudSuite Pro",
