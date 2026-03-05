@@ -1,0 +1,83 @@
+{
+    "name": "cloudsuitepro-printer-service",
+    "version": "1.0.0",
+    "description": "CloudSuite Pro Printer Service - Servicio de impresión para impresoras térmicas",
+    "main": "electron/main.js",
+    "author": "CloudSuite Pro",
+    "license": "MIT",
+    "scripts": {
+        "start": "electron .",
+        "dev": "electron . --dev",
+        "build": "electron-builder",
+        "build:win": "electron-builder --win",
+        "build:mac": "electron-builder --mac",
+        "build:linux": "electron-builder --linux"
+    },
+    "dependencies": {
+        "express": "^4.18.2",
+        "cors": "^2.8.5",
+        "node-thermal-printer": "^4.4.4",
+        "serialport": "^12.0.0",
+        "electron-log": "^5.0.1"
+    },
+    "devDependencies": {
+        "electron": "^28.0.0",
+        "electron-builder": "^24.9.1"
+    },
+    "build": {
+        "appId": "com.cloudsuitepro.printer",
+        "productName": "CloudSuite Printer Service",
+        "directories": {
+            "output": "dist"
+        },
+        "files": [
+            "electron/**/*",
+            "server/**/*",
+            "config/**/*",
+            "assets/**/*",
+            "package.json"
+        ],
+        "win": {
+            "target": [
+                {
+                    "target": "nsis",
+                    "arch": [
+                        "x64"
+                    ]
+                }
+            ],
+            "icon": "assets/icon.ico",
+            "artifactName": "CloudSuite-Printer-Service-Setup-${version}.${ext}"
+        },
+        "mac": {
+            "target": [
+                "dmg"
+            ],
+            "icon": "assets/icon.png",
+            "category": "public.app-category.business",
+            "artifactName": "CloudSuite-Printer-Service-${version}.${ext}"
+        },
+        "linux": {
+            "target": [
+                "AppImage"
+            ],
+            "icon": "assets/icon.png",
+            "category": "Office"
+        },
+        "nsis": {
+            "oneClick": false,
+            "allowToChangeInstallationDirectory": true,
+            "createDesktopShortcut": false,
+            "createStartMenuShortcut": true,
+            "shortcutName": "CloudSuite Printer Service",
+            "runAfterFinish": true
+        },
+        "publish": [
+            {
+                "provider": "github",
+                "owner": "cloudsuitepro",
+                "repo": "cloudsuitepro-printer-service"
+            }
+        ]
+    }
+}
