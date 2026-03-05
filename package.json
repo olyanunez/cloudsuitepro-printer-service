@@ -48,12 +48,19 @@
             ],
             "icon": "assets/icon.png",
             "artifactName": "CloudSuite-Printer-Service-Setup-${version}.${ext}",
-            "signingHashAlgorithms": ["sha256"],
+            "signingHashAlgorithms": [
+                "sha256"
+            ],
             "sign": null
         },
         "mac": {
             "target": [
-                "dmg"
+                {
+                    "target": "dmg",
+                    "arch": [
+                        "universal"
+                    ]
+                }
             ],
             "icon": "assets/icon.png",
             "category": "public.app-category.business",
@@ -85,6 +92,9 @@
             }
         ],
         "afterSign": null,
-        "electronLanguages": ["es", "en"]
+        "electronLanguages": [
+            "es",
+            "en"
+        ]
     }
 }
