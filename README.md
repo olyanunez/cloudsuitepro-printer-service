@@ -112,3 +112,9 @@ Para soporte técnico, visita: https://docs.cloudsuitepro.online
 ## Licencia
 
 MIT License
+
+# Subir cambios y ejecutar action nuevo.
+- git commit -m "fix: printer service improvements" && git push origin main && git tag -fa v1.0.0 -m "v1.0.0" && git push origin v1.0.0 --force
+
+# Subir cambios y reemplazar un actinon ya hecho.
+- git commit -m "fix: printer service improvements" && git tag -d v1.0.0 && git push origin :refs/tags/v1.0.0 && git tag v1.0.0 && git push origin main && git push origin v1.0.0
