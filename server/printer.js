@@ -1,7 +1,11 @@
 const { ThermalPrinter, PrinterTypes } = require('node-thermal-printer');
+const { exec } = require('child_process');
+const { promisify } = require('util');
+const execAsync = promisify(exec);
 const log = require('electron-log');
 const fs = require('fs');
 const path = require('path');
+const os = require('os');
 
 class PrinterService {
     constructor() {
@@ -59,9 +63,12 @@ class PrinterService {
     }
 
     createPrinter() {
-        const printer = new ThermalPrinter({
+        // Crear ThermalPrinter que escribe a un archivo temporal
+        const tempFile = path.join(os.tmpdir(), `print_${Date.now()}.raw`);
+
+        const thermalPrinter = new ThermalPrinter({
             type: PrinterTypes[this.config.printerType] || PrinterTypes.EPSON,
-            interface: this.config.interface,
+            interface: tempFile, // Escribe a archivo
             width: this.config.width,
             characterSet: this.config.characterSet,
             options: {
@@ -69,37 +76,83 @@ class PrinterService {
             }
         });
 
-        if (this.config.printerName) {
-            printer.setPrinter(this.config.printerName);
+        // Guardar referencia al archivo temporal
+        thermalPrinter._tempFile = tempFile;
+
+        return thermalPrinter;
+    }
+
+    async sendToPrinter(buffer) {
+        if (!this.config.printerName) {
+            throw new Error('No hay impresora configurada');
         }
 
-        return printer;
+        const tempFile = path.join(os.tmpdir(), `print_${Date.now()}.raw`);
+
+        try {
+            // Agregar bytes nulos al inicio como padding para evitar perdida de datos
+            const padding = Buffer.alloc(64, 0x00);
+            const fullBuffer = Buffer.concat([padding, buffer]);
+
+            // Escribir buffer al archivo temporal
+            fs.writeFileSync(tempFile, fullBuffer);
+
+            // Enviar a la impresora usando lp (macOS/Linux) o lpr
+            if (process.platform === 'darwin' || process.platform === 'linux') {
+                await execAsync(`lp -d "${this.config.printerName}" -o raw "${tempFile}"`);
+            } else if (process.platform === 'win32') {
+                // En Windows usar print o powershell
+                await execAsync(`print /D:"${this.config.printerName}" "${tempFile}"`);
+            }
+
+            log.info('Datos enviados a la impresora');
+        } finally {
+            // Limpiar archivo temporal
+            try {
+                if (fs.existsSync(tempFile)) {
+                    fs.unlinkSync(tempFile);
+                }
+            } catch (e) {
+                log.warn('No se pudo eliminar archivo temporal:', e.message);
+            }
+        }
     }
 
     async listPrinters() {
         try {
-            const printer = this.createPrinter();
-            const printers = printer.printerName ? [printer.printerName] : [];
-
-            // En macOS, intentar obtener la lista de impresoras del sistema
+            // En macOS, obtener la lista de impresoras del sistema
             if (process.platform === 'darwin') {
-                const { execSync } = require('child_process');
                 try {
-                    const output = execSync('lpstat -p -d', { encoding: 'utf8' });
-                    const lines = output.split('\n');
+                    const { stdout } = await execAsync('lpstat -p 2>/dev/null || echo ""');
+                    const lines = stdout.split('\n');
                     const printerNames = lines
                         .filter(line => line.startsWith('printer'))
                         .map(line => line.split(' ')[1]);
-                    return printerNames.length > 0 ? printerNames : printers;
+                    return printerNames;
                 } catch (err) {
-                    log.warn('No se pudo obtener lista de impresoras del sistema');
+                    log.warn('No se pudo obtener lista de impresoras del sistema:', err.message);
+                    return [];
                 }
             }
 
-            return printers;
+            // En Windows, usar wmic o powershell
+            if (process.platform === 'win32') {
+                try {
+                    const { stdout } = await execAsync('wmic printer get name');
+                    const lines = stdout.split('\n')
+                        .map(line => line.trim())
+                        .filter(line => line && line !== 'Name');
+                    return lines;
+                } catch (err) {
+                    log.warn('No se pudo obtener lista de impresoras del sistema:', err.message);
+                    return [];
+                }
+            }
+
+            return [];
         } catch (error) {
             log.error('Error listando impresoras:', error);
-            throw error;
+            return [];
         }
     }
 
@@ -107,54 +160,56 @@ class PrinterService {
         // Modo simulación: Si no hay impresora configurada, solo mostrar en log
         if (!this.config.printerName) {
             log.info('═══════════════════════════════════════════════');
-            log.info('🖨️  MODO SIMULACIÓN - Sin impresora configurada');
+            log.info('MODO SIMULACION - Sin impresora configurada');
             log.info('═══════════════════════════════════════════════');
             log.info('');
             log.info(`          ${data.companyName || 'CloudSuite Pro'}`);
             if (data.companyAddress) log.info(`          ${data.companyAddress}`);
             if (data.companyRnc) log.info(`          RNC: ${data.companyRnc}`);
             if (data.companyPhone) log.info(`          Tel: ${data.companyPhone}`);
-            log.info('───────────────────────────────────────────────');
+            log.info('-----------------------------------------------');
             if (data.ncf) log.info(`NCF: ${data.ncf}`);
             log.info(`FACTURA: ${data.invoiceNumber || 'N/A'}`);
             log.info(`Fecha: ${this.formatDate(data.date)}`);
             log.info(`Cliente: ${data.customerName || 'Consumidor Final'}`);
             if (data.customerRnc) log.info(`RNC/Cedula: ${data.customerRnc}`);
-            log.info('───────────────────────────────────────────────');
+            log.info('-----------------------------------------------');
             log.info('Cant  Descripcion              Total');
-            log.info('───────────────────────────────────────────────');
+            log.info('-----------------------------------------------');
 
             for (const item of data.items || []) {
-                const qty = (item.quantity?.toString() || '1').padEnd(5);
+                const qty = item.quantity || 1;
+                const unitPrice = item.price || 0;
+                const itemTotal = item.total || (qty * unitPrice);
+                const qtyStr = qty.toString().padEnd(5);
                 const name = this.truncate(item.name || item.description || '', 20).padEnd(23);
-                const total = `$${this.formatMoney(item.total || item.price)}`;
-                log.info(`${qty} ${name} ${total}`);
-                if (item.quantity > 1 && item.price) {
-                    log.info(`      @ $${this.formatMoney(item.price)} c/u`);
+                log.info(`${qtyStr} ${name} RD$${this.formatMoney(itemTotal)}`);
+                if (qty > 1 && unitPrice) {
+                    log.info(`      @ RD$${this.formatMoney(unitPrice)} c/u`);
                 }
             }
 
-            log.info('───────────────────────────────────────────────');
+            log.info('-----------------------------------------------');
             if (data.subtotal !== undefined) {
-                log.info(`                  Subtotal: $${this.formatMoney(data.subtotal)}`);
+                log.info(`                  Subtotal: RD$${this.formatMoney(data.subtotal)}`);
             }
             if (data.discount && data.discount > 0) {
-                log.info(`                 Descuento: -$${this.formatMoney(data.discount)}`);
+                log.info(`                 Descuento: -RD$${this.formatMoney(data.discount)}`);
             }
             if (data.tax !== undefined) {
-                log.info(`             ITBIS (18%): $${this.formatMoney(data.tax)}`);
+                log.info(`             ITBIS (18%): RD$${this.formatMoney(data.tax)}`);
             }
-            log.info('═══════════════════════════════════════════════');
-            log.info(`              TOTAL: $${this.formatMoney(data.total)}`);
-            log.info('═══════════════════════════════════════════════');
+            log.info('===============================================');
+            log.info(`              TOTAL: RD$${this.formatMoney(data.total)}`);
+            log.info('===============================================');
             if (data.paymentMethod) {
                 log.info(`Metodo de pago: ${data.paymentMethod}`);
             }
             log.info('');
-            log.info('          ¡Gracias por su compra!');
+            log.info('          Gracias por su compra!');
             if (data.footer) log.info(`          ${data.footer}`);
             log.info('');
-            log.info('✅ Factura simulada exitosamente');
+            log.info('Factura simulada exitosamente');
             log.info('');
             return;
         }
@@ -163,14 +218,13 @@ class PrinterService {
         const printer = this.createPrinter();
 
         try {
-            // Header
+            // Header - Nombre de empresa
             printer.alignCenter();
-            printer.setTextSize(1, 1);
             printer.bold(true);
             printer.println(data.companyName || 'CloudSuite Pro');
             printer.bold(false);
-            printer.setTextSize(0, 0);
 
+            // Datos de la empresa
             if (data.companyAddress) printer.println(data.companyAddress);
             if (data.companyRnc) printer.println(`RNC: ${data.companyRnc}`);
             if (data.companyPhone) printer.println(`Tel: ${data.companyPhone}`);
@@ -206,15 +260,19 @@ class PrinterService {
 
             // Items
             for (const item of data.items || []) {
+                const qty = item.quantity || 1;
+                const unitPrice = item.price || 0;
+                const itemTotal = item.total || (qty * unitPrice);
+
                 printer.tableCustom([
-                    { text: item.quantity?.toString() || '1', align: 'LEFT', width: 0.1 },
+                    { text: qty.toString(), align: 'LEFT', width: 0.1 },
                     { text: this.truncate(item.name || item.description || '', 24), align: 'LEFT', width: 0.5 },
-                    { text: `$${this.formatMoney(item.total || item.price)}`, align: 'RIGHT', width: 0.39 }
+                    { text: `RD$${this.formatMoney(itemTotal)}`, align: 'RIGHT', width: 0.39 }
                 ]);
 
                 // Precio unitario si es diferente
-                if (item.quantity > 1 && item.price) {
-                    printer.println(`  @ $${this.formatMoney(item.price)} c/u`);
+                if (qty > 1 && unitPrice) {
+                    printer.println(`  @ RD$${this.formatMoney(unitPrice)} c/u`);
                 }
             }
 
@@ -224,23 +282,23 @@ class PrinterService {
             printer.alignRight();
 
             if (data.subtotal !== undefined) {
-                printer.println(`Subtotal: $${this.formatMoney(data.subtotal)}`);
+                printer.println(`Subtotal: RD$${this.formatMoney(data.subtotal)}`);
             }
 
             if (data.discount && data.discount > 0) {
-                printer.println(`Descuento: -$${this.formatMoney(data.discount)}`);
+                printer.println(`Descuento: -RD$${this.formatMoney(data.discount)}`);
             }
 
             if (data.tax !== undefined) {
-                printer.println(`ITBIS (18%): $${this.formatMoney(data.tax)}`);
+                printer.println(`ITBIS (18%): RD$${this.formatMoney(data.tax)}`);
             }
 
             printer.drawLine();
             printer.bold(true);
-            printer.setTextSize(1, 1);
-            printer.println(`TOTAL: $${this.formatMoney(data.total)}`);
+            printer.setTextDoubleHeight();
+            printer.println(`TOTAL: RD$${this.formatMoney(data.total)}`);
+            printer.setTextNormal();
             printer.bold(false);
-            printer.setTextSize(0, 0);
 
             // Método de pago
             if (data.paymentMethod) {
@@ -252,15 +310,14 @@ class PrinterService {
             printer.alignCenter();
             printer.newLine();
             printer.println('Gracias por su compra!');
-
             if (data.footer) {
                 printer.println(data.footer);
             }
-
-            printer.newLine();
             printer.cut();
 
-            await printer.execute();
+            // Obtener el buffer y enviarlo a la impresora
+            const buffer = printer.getBuffer();
+            await this.sendToPrinter(buffer);
             log.info('Factura impresa exitosamente');
         } catch (error) {
             log.error('Error imprimiendo factura:', error);
@@ -269,6 +326,11 @@ class PrinterService {
     }
 
     async printTicket(data) {
+        if (!this.config.printerName) {
+            log.info('MODO SIMULACION - Ticket:', data);
+            return;
+        }
+
         const printer = this.createPrinter();
 
         try {
@@ -290,7 +352,8 @@ class PrinterService {
             printer.alignCenter();
             printer.cut();
 
-            await printer.execute();
+            const buffer = printer.getBuffer();
+            await this.sendToPrinter(buffer);
             log.info('Ticket impreso exitosamente');
         } catch (error) {
             log.error('Error imprimiendo ticket:', error);
@@ -299,6 +362,11 @@ class PrinterService {
     }
 
     async printReport(data) {
+        if (!this.config.printerName) {
+            log.info('MODO SIMULACION - Reporte:', data);
+            return;
+        }
+
         const printer = this.createPrinter();
 
         try {
@@ -329,7 +397,8 @@ class PrinterService {
             printer.newLine();
             printer.cut();
 
-            await printer.execute();
+            const buffer = printer.getBuffer();
+            await this.sendToPrinter(buffer);
             log.info('Reporte impreso exitosamente');
         } catch (error) {
             log.error('Error imprimiendo reporte:', error);
@@ -338,19 +407,39 @@ class PrinterService {
     }
 
     async openCashDrawer() {
+        if (!this.config.printerName) {
+            log.info('MODO SIMULACION - Abriendo cajon');
+            return;
+        }
+
         const printer = this.createPrinter();
 
         try {
             printer.openCashDrawer();
-            await printer.execute();
-            log.info('Cajón abierto');
+            const buffer = printer.getBuffer();
+            await this.sendToPrinter(buffer);
+            log.info('Cajon abierto');
         } catch (error) {
-            log.error('Error abriendo cajón:', error);
+            log.error('Error abriendo cajon:', error);
             throw error;
         }
     }
 
     async testPrint() {
+        if (!this.config.printerName) {
+            log.info('===============================================');
+            log.info('        MODO SIMULACION - TEST DE IMPRESION');
+            log.info('===============================================');
+            log.info('        CloudSuite Printer Service');
+            log.info(`        ${this.formatDate(new Date())}`);
+            log.info('-----------------------------------------------');
+            log.info('        Si puede leer esto,');
+            log.info('        la impresora funciona correctamente!');
+            log.info('===============================================');
+            log.info('Test de impresion simulado exitosamente');
+            return;
+        }
+
         const printer = this.createPrinter();
 
         try {
@@ -366,10 +455,11 @@ class PrinterService {
             printer.newLine();
             printer.cut();
 
-            await printer.execute();
-            log.info('Test de impresión ejecutado');
+            const buffer = printer.getBuffer();
+            await this.sendToPrinter(buffer);
+            log.info('Test de impresion ejecutado');
         } catch (error) {
-            log.error('Error en test de impresión:', error);
+            log.error('Error en test de impresion:', error);
             throw error;
         }
     }
@@ -387,7 +477,10 @@ class PrinterService {
     }
 
     formatMoney(amount) {
-        return parseFloat(amount || 0).toFixed(2);
+        return parseFloat(amount || 0).toLocaleString('es-DO', {
+            minimumFractionDigits: 2,
+            maximumFractionDigits: 2
+        });
     }
 
     truncate(str, length) {
