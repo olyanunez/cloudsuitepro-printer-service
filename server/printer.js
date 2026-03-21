@@ -217,7 +217,8 @@ class PrinterService {
                 log.info(`                 Descuento: -RD$${this.formatMoney(data.discount)}`);
             }
             if (data.tax !== undefined) {
-                log.info(`             ITBIS (18%): RD$${this.formatMoney(data.tax)}`);
+                const itbisRate = data.itbisRate || 18;
+                log.info(`             ITBIS (${itbisRate}%): RD$${this.formatMoney(data.tax)}`);
             }
             log.info('===============================================');
             log.info(`              TOTAL: RD$${this.formatMoney(data.total)}`);
@@ -355,7 +356,8 @@ class PrinterService {
             }
 
             if (data.tax !== undefined) {
-                printer.println(`ITBIS (18%): RD$${this.formatMoney(data.tax)}`);
+                const itbisRate = data.itbisRate || 18;
+                printer.println(`ITBIS (${itbisRate}%): RD$${this.formatMoney(data.tax)}`);
             }
 
             printer.drawLine();
