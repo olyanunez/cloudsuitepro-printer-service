@@ -168,24 +168,44 @@ class PrinterService {
             if (data.companyRnc) log.info(`          RNC: ${data.companyRnc}`);
             if (data.companyPhone) log.info(`          Tel: ${data.companyPhone}`);
             log.info('-----------------------------------------------');
-            if (data.ncf) log.info(`NCF: ${data.ncf}`);
-            log.info(`FACTURA: ${data.invoiceNumber || 'N/A'}`);
-            log.info(`Fecha: ${this.formatDate(data.date)}`);
+            // Fecha (izquierda) y Hora (derecha)
+            const dateObj = new Date(data.date);
+            const dateStr = dateObj.toLocaleDateString('es-DO', { day: '2-digit', month: '2-digit', year: 'numeric' });
+            const timeStr = dateObj.toLocaleTimeString('es-DO', { hour: '2-digit', minute: '2-digit' });
+            log.info(`${dateStr.padEnd(30)}${timeStr}`);
+            log.info(`No. Factura: ${data.invoiceNumber || 'N/A'}`);
             log.info(`Cliente: ${data.customerName || 'Consumidor Final'}`);
             if (data.customerRnc) log.info(`RNC/Cedula: ${data.customerRnc}`);
+            if (data.invoiceType) log.info(`Tipo: ${data.invoiceType}`);
+            if (data.ncf) log.info(`NCF: ${data.ncf}`);
+            if (data.cashierName) log.info(`Cajero(a): ${data.cashierName}`);
             log.info('-----------------------------------------------');
-            log.info('Cant  Descripcion              Total');
+            log.info('Cant  Descripcion        Precio     Total');
             log.info('-----------------------------------------------');
 
+            const nameMaxChars = 18;
             for (const item of data.items || []) {
                 const qty = item.quantity || 1;
                 const unitPrice = item.price || 0;
-                const itemTotal = item.total || (qty * unitPrice);
+                const itemTotal = item.total;
+                const productName = item.name || item.description || '';
+
+                // Dividir nombre en líneas si es necesario
+                const nameLine1 = productName.substring(0, nameMaxChars).padEnd(nameMaxChars);
+                const nameLine2 = productName.length > nameMaxChars
+                    ? productName.substring(nameMaxChars, nameMaxChars * 2).trim()
+                    : '';
+
                 const qtyStr = qty.toString().padEnd(5);
-                const name = this.truncate(item.name || item.description || '', 20).padEnd(23);
-                log.info(`${qtyStr} ${name} RD$${this.formatMoney(itemTotal)}`);
-                if (qty > 1 && unitPrice) {
-                    log.info(`      @ RD$${this.formatMoney(unitPrice)} c/u`);
+                const priceStr = this.formatMoney(unitPrice).padStart(8);
+                const totalStr = this.formatMoney(itemTotal).padStart(10);
+
+                // Primera línea
+                log.info(`${qtyStr} ${nameLine1} ${priceStr} ${totalStr}`);
+
+                // Segunda línea del nombre si existe
+                if (nameLine2) {
+                    log.info(`      ${nameLine2.padEnd(nameMaxChars)}`);
                 }
             }
 
@@ -226,53 +246,98 @@ class PrinterService {
 
             // Datos de la empresa
             if (data.companyAddress) printer.println(data.companyAddress);
-            if (data.companyRnc) printer.println(`RNC: ${data.companyRnc}`);
             if (data.companyPhone) printer.println(`Tel: ${data.companyPhone}`);
+            if (data.companyRnc) printer.println(`RNC: ${data.companyRnc}`);
 
             printer.drawLine();
 
-            // Info factura
-            printer.alignLeft();
+            // Título FACTURA centrado
+            printer.alignCenter();
             printer.bold(true);
-
-            if (data.ncf) {
-                printer.println(`NCF: ${data.ncf}`);
-            }
-            printer.println(`FACTURA: ${data.invoiceNumber || 'N/A'}`);
+            printer.println('FACTURA');
             printer.bold(false);
 
-            printer.println(`Fecha: ${this.formatDate(data.date)}`);
+            printer.drawLine();
+
+            // Info factura - nuevo orden
+            printer.alignLeft();
+
+            // Fecha (izquierda) y Hora (derecha)
+            const dateObj = new Date(data.date);
+            const dateStr = dateObj.toLocaleDateString('es-DO', { day: '2-digit', month: '2-digit', year: 'numeric' });
+            const timeStr = dateObj.toLocaleTimeString('es-DO', { hour: '2-digit', minute: '2-digit' });
+            const printerWidth = this.config.width || 48;
+            const dateTimeLine = dateStr.padEnd(printerWidth - timeStr.length) + timeStr;
+            printer.println(dateTimeLine);
+
+            // Número de factura
+            printer.bold(true);
+            printer.println(`No. Factura: ${data.invoiceNumber || 'N/A'}`);
+            printer.bold(false);
+
+            // Cliente
             printer.println(`Cliente: ${data.customerName || 'Consumidor Final'}`);
 
+            // RNC del cliente
             if (data.customerRnc) {
                 printer.println(`RNC/Cedula: ${data.customerRnc}`);
             }
 
+            // Tipo de factura (nombre legible)
+            if (data.invoiceType) {
+                printer.println(`Tipo: ${data.invoiceType}`);
+            }
+
+            // NCF
+            if (data.ncf) {
+                printer.println(`NCF: ${data.ncf}`);
+            }
+
+            // Cajero(a)
+            if (data.cashierName) {
+                printer.println(`Cajero(a): ${data.cashierName}`);
+            }
+
             printer.drawLine();
 
-            // Tabla de items
-            printer.tableCustom([
-                { text: 'Cant', align: 'LEFT', width: 0.1 },
-                { text: 'Descripcion', align: 'LEFT', width: 0.5 },
-                { text: 'Total', align: 'RIGHT', width: 0.39 }
-            ]);
+            // Encabezado de items
+            // Ancho total = 48 caracteres
+            // Cant(4) + espacio(1) + Descripcion(16) + espacio(3) + Precio(9) + espacio(1) + Total(14)
+            const priceColWidth = 9;   // Ancho columna Precio
+            const totalColWidth = 14;  // Ancho columna Total (alineado con subtotal)
+            const headerQty = 'Cant'.padEnd(4);
+            const headerDesc = 'Descripcion'.padEnd(16);
+            const headerPrice = 'Precio'.padEnd(priceColWidth);   // Alineado izquierda
+            const headerTotal = 'Total'.padStart(totalColWidth);  // Alineado derecha
+            printer.println(`${headerQty} ${headerDesc}   ${headerPrice} ${headerTotal}`);
             printer.drawLine();
 
             // Items
+            const nameMaxChars = 16; // Caracteres máximos por línea para el nombre
+
             for (const item of data.items || []) {
                 const qty = item.quantity || 1;
                 const unitPrice = item.price || 0;
-                const itemTotal = item.total || (qty * unitPrice);
+                const itemTotal = item.total;
+                const productName = item.name || item.description || '';
 
-                printer.tableCustom([
-                    { text: qty.toString(), align: 'LEFT', width: 0.1 },
-                    { text: this.truncate(item.name || item.description || '', 24), align: 'LEFT', width: 0.5 },
-                    { text: `RD$${this.formatMoney(itemTotal)}`, align: 'RIGHT', width: 0.39 }
-                ]);
+                // Formatear campos
+                const qtyStr = qty.toString().padEnd(4);
+                const priceStr = this.formatMoney(unitPrice).padEnd(priceColWidth);   // Alineado izquierda
+                const totalStr = this.formatMoney(itemTotal).padStart(totalColWidth); // Alineado derecha
 
-                // Precio unitario si es diferente
-                if (qty > 1 && unitPrice) {
-                    printer.println(`  @ RD$${this.formatMoney(unitPrice)} c/u`);
+                // Dividir nombre en líneas si es necesario
+                const nameLine1 = productName.substring(0, nameMaxChars).padEnd(nameMaxChars);
+                const nameLine2 = productName.length > nameMaxChars
+                    ? productName.substring(nameMaxChars, nameMaxChars * 2).trim()
+                    : '';
+
+                // Primera línea con cantidad, nombre, precio y total (3 espacios entre desc y precio)
+                printer.println(`${qtyStr} ${nameLine1}   ${priceStr} ${totalStr}`);
+
+                // Segunda línea del nombre si existe
+                if (nameLine2) {
+                    printer.println(`     ${nameLine2}`);
                 }
             }
 
