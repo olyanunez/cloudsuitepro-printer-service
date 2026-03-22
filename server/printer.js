@@ -122,8 +122,8 @@ class PrinterService {
             if (process.platform === 'darwin' || process.platform === 'linux') {
                 await execAsync(`lp -d "${this.config.printerName}" -o raw "${tempFile}"`);
             } else if (process.platform === 'win32') {
-                // En Windows usar print o powershell
-                await execAsync(`print /D:"${this.config.printerName}" "${tempFile}"`);
+                // En Windows, enviar RAW real al spooler (ESC/POS) con WinSpool
+                await this.sendRawToWindowsPrinter(tempFile, this.config.printerName);
             }
 
             log.info('Datos enviados a la impresora');
@@ -135,6 +135,124 @@ class PrinterService {
                 }
             } catch (e) {
                 log.warn('No se pudo eliminar archivo temporal:', e.message);
+            }
+        }
+    }
+
+    async sendRawToWindowsPrinter(tempFile, printerName) {
+        const psScript = `
+            $ErrorActionPreference = 'Stop'
+            $printerName = $env:CSP_PRINTER_NAME
+            $filePath = $env:CSP_TEMP_FILE
+
+            if (-not $printerName) { throw 'CSP_PRINTER_NAME no definido' }
+            if (-not (Test-Path -LiteralPath $filePath)) { throw "Archivo no encontrado: $filePath" }
+
+            Add-Type -TypeDefinition @"
+using System;
+using System.Runtime.InteropServices;
+
+public static class RawPrinterHelper
+{
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    public class DOCINFOA
+    {
+        [MarshalAs(UnmanagedType.LPWStr)]
+        public string pDocName;
+        [MarshalAs(UnmanagedType.LPWStr)]
+        public string pOutputFile;
+        [MarshalAs(UnmanagedType.LPWStr)]
+        public string pDataType;
+    }
+
+    [DllImport("winspool.Drv", EntryPoint = "OpenPrinterW", SetLastError = true, CharSet = CharSet.Unicode)]
+    public static extern bool OpenPrinter(string pPrinterName, out IntPtr phPrinter, IntPtr pDefault);
+
+    [DllImport("winspool.Drv", EntryPoint = "ClosePrinter", SetLastError = true)]
+    public static extern bool ClosePrinter(IntPtr hPrinter);
+
+    [DllImport("winspool.Drv", EntryPoint = "StartDocPrinterW", SetLastError = true, CharSet = CharSet.Unicode)]
+    public static extern bool StartDocPrinter(IntPtr hPrinter, int level, [In] DOCINFOA di);
+
+    [DllImport("winspool.Drv", EntryPoint = "EndDocPrinter", SetLastError = true)]
+    public static extern bool EndDocPrinter(IntPtr hPrinter);
+
+    [DllImport("winspool.Drv", EntryPoint = "StartPagePrinter", SetLastError = true)]
+    public static extern bool StartPagePrinter(IntPtr hPrinter);
+
+    [DllImport("winspool.Drv", EntryPoint = "EndPagePrinter", SetLastError = true)]
+    public static extern bool EndPagePrinter(IntPtr hPrinter);
+
+    [DllImport("winspool.Drv", EntryPoint = "WritePrinter", SetLastError = true)]
+    public static extern bool WritePrinter(IntPtr hPrinter, IntPtr pBytes, int dwCount, out int dwWritten);
+
+    public static bool SendBytesToPrinter(string printerName, byte[] bytes)
+    {
+        IntPtr hPrinter;
+        if (!OpenPrinter(printerName, out hPrinter, IntPtr.Zero))
+        {
+            return false;
+        }
+
+        var di = new DOCINFOA
+        {
+            pDocName = "CloudSuite Ticket",
+            pDataType = "RAW"
+        };
+
+        IntPtr unmanagedBytes = IntPtr.Zero;
+        try
+        {
+            if (!StartDocPrinter(hPrinter, 1, di)) return false;
+            if (!StartPagePrinter(hPrinter)) return false;
+
+            unmanagedBytes = Marshal.AllocCoTaskMem(bytes.Length);
+            Marshal.Copy(bytes, 0, unmanagedBytes, bytes.Length);
+
+            int written;
+            bool ok = WritePrinter(hPrinter, unmanagedBytes, bytes.Length, out written);
+            EndPagePrinter(hPrinter);
+            EndDocPrinter(hPrinter);
+            return ok && written == bytes.Length;
+        }
+        finally
+        {
+            if (unmanagedBytes != IntPtr.Zero) Marshal.FreeCoTaskMem(unmanagedBytes);
+            ClosePrinter(hPrinter);
+        }
+    }
+}
+"@
+
+            $bytes = [System.IO.File]::ReadAllBytes($filePath)
+            $ok = [RawPrinterHelper]::SendBytesToPrinter($printerName, $bytes)
+            if (-not $ok) {
+                $err = [Runtime.InteropServices.Marshal]::GetLastWin32Error()
+                throw "No se pudo enviar RAW a '$printerName'. Win32Error: $err"
+            }
+        `;
+
+        const psFile = path.join(os.tmpdir(), `cloudsuite_raw_${Date.now()}.ps1`);
+
+        try {
+            fs.writeFileSync(psFile, psScript, 'utf8');
+
+            await execAsync(`powershell -NoProfile -ExecutionPolicy Bypass -File "${psFile}"`, {
+                env: {
+                    ...process.env,
+                    CSP_PRINTER_NAME: printerName,
+                    CSP_TEMP_FILE: tempFile
+                },
+                maxBuffer: 1024 * 1024,
+                windowsHide: true
+            });
+        } finally {
+            try {
+                if (fs.existsSync(psFile)) {
+                    fs.unlinkSync(psFile);
+                }
+            } catch (e) {
+                log.warn('No se pudo eliminar script temporal de PowerShell:', e.message);
             }
         }
     }
@@ -158,14 +276,45 @@ class PrinterService {
 
             // En Windows, usar wmic o powershell
             if (process.platform === 'win32') {
+                const commands = [
+                    // Método recomendado en Windows 10/11
+                    'powershell -NoProfile -ExecutionPolicy Bypass -Command "Get-CimInstance Win32_Printer | Select-Object -ExpandProperty Name | ConvertTo-Json -Compress"',
+                    // Fallback si Get-CimInstance no está disponible por política
+                    'powershell -NoProfile -ExecutionPolicy Bypass -Command "Get-Printer | Select-Object -ExpandProperty Name | ConvertTo-Json -Compress"',
+                    // Último fallback para equipos antiguos
+                    'wmic printer get name'
+                ];
+
+                for (const command of commands) {
+                    try {
+                        const { stdout } = await execAsync(command);
+                        const printers = this.parsePrinterListOutput(stdout);
+                        if (printers.length > 0) {
+                            log.info(`Impresoras detectadas (${printers.length}) usando: ${command.split(' ')[0]}`);
+                            return printers;
+                        }
+                    } catch (err) {
+                        log.warn(`Falló comando de listado de impresoras: ${command.split(' ')[0]} - ${err.message}`);
+                    }
+                }
+
+                log.warn('No se encontraron impresoras en Windows con los métodos disponibles');
+                return [];
+            }
+
+            // En Linux, usar CUPS
+            if (process.platform === 'linux') {
                 try {
-                    const { stdout } = await execAsync('wmic printer get name');
+                    const { stdout } = await execAsync('lpstat -a 2>/dev/null || echo ""');
                     const lines = stdout.split('\n')
                         .map(line => line.trim())
-                        .filter(line => line && line !== 'Name');
-                    return lines;
+                        .filter(Boolean)
+                        .map(line => line.split(' ')[0])
+                        .filter(Boolean);
+
+                    return [...new Set(lines)];
                 } catch (err) {
-                    log.warn('No se pudo obtener lista de impresoras del sistema:', err.message);
+                    log.warn('No se pudo obtener lista de impresoras en Linux:', err.message);
                     return [];
                 }
             }
@@ -174,6 +323,29 @@ class PrinterService {
         } catch (error) {
             log.error('Error listando impresoras:', error);
             return [];
+        }
+    }
+
+    parsePrinterListOutput(stdout) {
+        if (!stdout) return [];
+
+        const text = String(stdout).trim();
+        if (!text) return [];
+
+        // Intentar parsear JSON (salida de PowerShell + ConvertTo-Json)
+        try {
+            const parsed = JSON.parse(text);
+            const list = Array.isArray(parsed) ? parsed : [parsed];
+            return [...new Set(list
+                .map(item => String(item || '').trim())
+                .filter(name => name && name.toLowerCase() !== 'name'))];
+        } catch (_) {
+            // Si no es JSON, asumir salida tabular (wmic)
+            const lines = text
+                .split(/\r?\n/)
+                .map(line => line.trim())
+                .filter(line => line && line.toLowerCase() !== 'name');
+            return [...new Set(lines)];
         }
     }
 
