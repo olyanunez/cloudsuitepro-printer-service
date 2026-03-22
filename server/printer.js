@@ -9,8 +9,29 @@ const os = require('os');
 
 class PrinterService {
     constructor() {
-        this.configPath = path.join(__dirname, '../config/settings.json');
+        // Usar una ruta escribible para la configuración
+        this.configPath = this.getConfigPath();
+        log.info('Config path:', this.configPath);
         this.loadConfig();
+    }
+
+    getConfigPath() {
+        // Intentar obtener el path de userData de Electron
+        try {
+            const { app } = require('electron');
+            if (app && app.getPath) {
+                const userDataPath = app.getPath('userData');
+                log.info('Usando userData de Electron:', userDataPath);
+                return path.join(userDataPath, 'settings.json');
+            }
+        } catch (e) {
+            log.info('No se pudo obtener userData de Electron, usando fallback');
+        }
+
+        // Fallback: usar directorio en el home del usuario
+        const configDir = path.join(os.homedir(), '.cloudsuite-printer');
+        log.info('Usando directorio de configuración:', configDir);
+        return path.join(configDir, 'settings.json');
     }
 
     loadConfig() {
