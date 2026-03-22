@@ -43,10 +43,12 @@ app.whenReady().then(() => {
 });
 
 function createTray() {
+    // Usar app.getAppPath() para obtener la ruta correcta en modo empaquetado
+    const appPath = app.getAppPath();
+    const iconPath = path.join(appPath, 'assets', 'icon.png');
+
     // Crear icono del tray
-    const icon = nativeImage.createFromPath(
-        path.join(__dirname, '../assets/icon.png')
-    );
+    const icon = nativeImage.createFromPath(iconPath);
 
     tray = new Tray(icon.resize({ width: 16, height: 16 }));
 
@@ -99,6 +101,14 @@ function openSettings() {
         return;
     }
 
+    // Usar app.getAppPath() para obtener la ruta correcta en modo empaquetado
+    const appPath = app.getAppPath();
+    const settingsPath = path.join(appPath, 'assets', 'settings.html');
+    const iconPath = path.join(appPath, 'assets', 'icon.png');
+
+    log.info('App path:', appPath);
+    log.info('Settings path:', settingsPath);
+
     settingsWindow = new BrowserWindow({
         width: 600,
         height: 500,
@@ -108,10 +118,15 @@ function openSettings() {
             nodeIntegration: true,
             contextIsolation: false
         },
-        icon: path.join(__dirname, '../assets/icon.png')
+        icon: iconPath
     });
 
-    settingsWindow.loadFile(path.join(__dirname, '../assets/settings.html'));
+    settingsWindow.loadFile(settingsPath);
+
+    // Abrir DevTools en desarrollo para debug
+    if (!app.isPackaged) {
+        settingsWindow.webContents.openDevTools();
+    }
 
     settingsWindow.on('closed', () => {
         settingsWindow = null;
