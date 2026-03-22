@@ -155,12 +155,15 @@
     </div>
 
     <script>
-        const { ipcRenderer } = require('electron');
-
         // Cargar configuración y lista de impresoras
         window.addEventListener('DOMContentLoaded', async () => {
-            await loadPrinters();
-            await loadConfig();
+            try {
+                await loadPrinters();
+                await loadConfig();
+            } catch (error) {
+                console.error('Error al inicializar:', error);
+                showStatus('Error al inicializar: ' + error.message, 'error');
+            }
         });
 
         async function loadPrinters() {
